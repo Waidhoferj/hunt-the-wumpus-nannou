@@ -22,6 +22,39 @@ impl fmt::Display for TileHints {
         }
     }
 }
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
+enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+struct GameTextures {
+    player_front: wgpu::Texture,
+    player_side: wgpu::Texture,
+    player_back: wgpu::Texture,
+    wumpus: wgpu::Texture,
+    chest: wgpu::Texture,
+    tile: wgpu::Texture,
+}
+
+impl GameTextures {
+    fn new(app: &App) -> Self {
+        let resources_dir = app.assets_path().unwrap();
+        GameTextures {
+            player_front: wgpu::Texture::from_path(app, resources_dir.join("player_front.png"))
+                .unwrap(),
+            player_back: wgpu::Texture::from_path(app, resources_dir.join("player_back.png"))
+                .unwrap(),
+            player_side: wgpu::Texture::from_path(app, resources_dir.join("player_side.png"))
+                .unwrap(),
+            wumpus: wgpu::Texture::from_path(app, resources_dir.join("wumpus.png")).unwrap(),
+            chest: wgpu::Texture::from_path(app, resources_dir.join("chest.png")).unwrap(),
+            tile: wgpu::Texture::from_path(app, resources_dir.join("tile.png")).unwrap(),
+        }
+    }
+}
 
 #[derive(Eq, PartialEq, Hash)]
 enum TileState {
@@ -29,37 +62,12 @@ enum TileState {
     Wumpus,
     Gold,
     Empty,
-    Player,
-}
-struct Tile {
-    state: TileState,
-    hints: HashSet<TileHints>,
-    visited: bool,
+    Player { heading: Direction },
 }
 
-impl Tile {
-    fn new(state: TileState) -> Self {
-        Tile {
-            state,
-            hints: HashSet::new(),
-            visited: false,
-        }
-    }
-
-    fn draw(&self, draw: &Draw, rect: &Rect, textures: &HashMap<TileState, wgpu::Texture>) {
-        let tile_rect = draw.rect().xy(rect.xy()).wh(rect.wh());
-        if self.visited {
-            tile_rect
-                .color(rgba(0.3, 0.3, 0.3, 1.0))
-                .stroke(rgba(0.2, 0.2, 0.2, 1.0));
-        } else {
-            tile_rect
-                .color(rgba(0.0, 0.0, 0.0, 1.0))
-                .stroke(rgba(0.2, 0.2, 0.2, 1.0));
-            return;
-        }
-
-        match self.state {
+impl TileState {
+    fn draw(&self, draw: &Draw, rect: &Rect, textures: &GameTextures) {
+        match self {
             TileState::Gold => {
                 draw.ellipse()
                     .xy(rect.xy())
@@ -78,12 +86,48 @@ impl Tile {
                     .xy(rect.xy())
                     .color(RED);
             }
-            TileState::Player => {
-                let texture = textures.get(&TileState::Player).unwrap();
-                draw.texture(texture).xy(rect.xy()).wh(rect.wh());
+            TileState::Player { heading } => {
+                let player_texture = match heading {
+                    Direction::Up => &textures.player_back,
+                    Direction::Down => &textures.player_front,
+                    Direction::Right => &textures.player_side,
+                    Direction::Left => &textures.player_side,
+                };
+                draw.texture(player_texture).xy(rect.xy()).wh(rect.wh());
             }
             _ => (),
         }
+    }
+}
+struct Tile {
+    state: TileState,
+    hints: HashSet<TileHints>,
+    visited: bool,
+}
+
+impl Tile {
+    fn new(state: TileState) -> Self {
+        Tile {
+            state,
+            hints: HashSet::new(),
+            visited: false,
+        }
+    }
+
+    fn draw(&self, draw: &Draw, rect: &Rect, textures: &GameTextures) {
+        let tile_rect = draw.rect().xy(rect.xy()).wh(rect.wh());
+        if self.visited {
+            tile_rect
+                .color(rgba(0.3, 0.3, 0.3, 1.0))
+                .stroke(rgba(0.2, 0.2, 0.2, 1.0));
+        } else {
+            tile_rect
+                .color(rgba(0.0, 0.0, 0.0, 1.0))
+                .stroke(rgba(0.2, 0.2, 0.2, 1.0));
+            return;
+        }
+
+        self.state.draw(draw, rect, textures);
 
         let hint_text = self.hints.iter().fold(String::from(""), |hints, hint| {
             format!("{}\n{}", hints, hint)
@@ -104,14 +148,16 @@ struct Model {
     player_pos: [usize; 2],
     score: i32,
     total_score: i32,
-    textures: HashMap<TileState, wgpu::Texture>,
+    textures: GameTextures,
 }
 
 impl Model {
-    fn new(board_size: usize) -> Self {
+    fn new(app: &App, board_size: usize) -> Self {
         let mut board = Model::create_board(board_size);
 
-        board[0][0].state = TileState::Player;
+        board[0][0].state = TileState::Player {
+            heading: Direction::Down,
+        };
         board[0][0].visited = true;
 
         apply_tile_hints(&mut board);
@@ -127,7 +173,7 @@ impl Model {
             player_pos: [0, 0],
             score: 0,
             total_score,
-            textures: HashMap::new(),
+            textures: GameTextures::new(&app),
         }
     }
 
@@ -157,32 +203,57 @@ fn main() {
 
 fn event(app: &App, m: &mut Model, e: WindowEvent) {
     let old_pos = m.player_pos.clone();
-    match e {
-        KeyPressed(key) => match key {
-            Key::Up if m.player_pos[1] < m.board.len() - 1 => m.player_pos[1] += 1,
-            Key::Down if m.player_pos[1] > 0 => m.player_pos[1] -= 1,
-            Key::Left if m.player_pos[0] > 0 => m.player_pos[0] -= 1,
-            Key::Right if m.player_pos[0] < m.board.len() - 1 => m.player_pos[0] += 1,
+    if let TileState::Player { mut heading } = &m.board[m.player_pos[1]][m.player_pos[0]].state {
+        match e {
+            KeyPressed(key) => match key {
+                Key::Up if m.player_pos[1] < m.board.len() - 1 => {
+                    if heading == Direction::Up {
+                        m.player_pos[1] += 1
+                    } else {
+                        heading = Direction::Up
+                    }
+                }
+                Key::Down if m.player_pos[1] > 0 => {
+                    if heading == Direction::Down {
+                        m.player_pos[1] -= 1
+                    } else {
+                        heading = Direction::Down;
+                    }
+                }
+                Key::Left if m.player_pos[0] > 0 => {
+                    if heading == Direction::Left {
+                        m.player_pos[0] -= 1
+                    } else {
+                        heading = Direction::Left;
+                    }
+                }
+                Key::Right if m.player_pos[0] < m.board.len() - 1 => {
+                    if heading == Direction::Right {
+                        m.player_pos[0] += 1
+                    } else {
+                        heading = Direction::Right;
+                    }
+                }
+                _ => (),
+            },
             _ => (),
-        },
-        _ => (),
-    }
-
-    match m.board[m.player_pos[1]][m.player_pos[0]].state {
-        TileState::Gold => {
-            m.score += 1;
-            m.board[m.player_pos[1]][m.player_pos[0]]
-                .hints
-                .remove(&TileHints::Glitter);
         }
-        TileState::Hole | TileState::Wumpus => *m = model(app),
-        _ => (),
-    }
 
-    if old_pos[0] != m.player_pos[0] || old_pos[1] != m.player_pos[1] {
+        match m.board[m.player_pos[1]][m.player_pos[0]].state {
+            TileState::Gold => {
+                m.score += 1;
+                m.board[m.player_pos[1]][m.player_pos[0]]
+                    .hints
+                    .remove(&TileHints::Glitter);
+            }
+            TileState::Hole | TileState::Wumpus => *m = model(app),
+            _ => (),
+        }
+
         m.board[old_pos[1]][old_pos[0]].state = TileState::Empty;
         let cur_tile = &mut m.board[m.player_pos[1]][m.player_pos[0]];
-        cur_tile.state = TileState::Player;
+        cur_tile.state = TileState::Player { heading };
+
         cur_tile.visited = true;
     }
 }
@@ -224,11 +295,7 @@ fn apply_tile_hints(board: &mut Vec<Vec<Tile>>) {
 
 fn model(app: &App) -> Model {
     app.new_window().event(event).view(view).build().unwrap();
-    let assets = app.assets_path().unwrap();
-    let player_texture = wgpu::Texture::from_path(app, assets.join("player.png")).unwrap();
-    let mut model = Model::new(10);
-    model.textures.insert(TileState::Player, player_texture);
-    model
+    Model::new(app, 10)
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {

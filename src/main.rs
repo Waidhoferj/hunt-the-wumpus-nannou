@@ -126,10 +126,6 @@ impl Player {
         }
         self.ammo -= 1;
 
-        // create next tuple based on direction
-        //check if wumpus
-        // if so return
-
         let trajectory: Vec<(usize, usize)> = match self.heading {
             Direction::Down => iter::repeat(self.position[0])
                 .zip((0..self.position[1]).rev())

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 
 use nannou::{
@@ -87,13 +87,22 @@ impl TileState {
                     .color(RED);
             }
             TileState::Player { heading } => {
+                let mut dir: f32 = 1.;
                 let player_texture = match heading {
                     Direction::Up => &textures.player_back,
                     Direction::Down => &textures.player_front,
-                    Direction::Right => &textures.player_side,
+                    Direction::Right => {
+                        dir = -1.;
+                        &textures.player_side
+                    }
                     Direction::Left => &textures.player_side,
                 };
-                draw.texture(player_texture).xy(rect.xy()).wh(rect.wh());
+
+                let [w, h] = player_texture.size();
+                let aspect = w as f32 / h as f32;
+                draw.texture(player_texture)
+                    .xy(rect.xy())
+                    .w_h(rect.w() * aspect * dir, rect.h());
             }
             _ => (),
         }
@@ -115,13 +124,12 @@ impl Tile {
     }
 
     fn draw(&self, draw: &Draw, rect: &Rect, textures: &GameTextures) {
-        let tile_rect = draw.rect().xy(rect.xy()).wh(rect.wh());
         if self.visited {
-            tile_rect
-                .color(rgba(0.3, 0.3, 0.3, 1.0))
-                .stroke(rgba(0.2, 0.2, 0.2, 1.0));
+            draw.texture(&textures.tile).xy(rect.xy()).wh(rect.wh());
         } else {
-            tile_rect
+            draw.rect()
+                .xy(rect.xy())
+                .wh(rect.wh())
                 .color(rgba(0.0, 0.0, 0.0, 1.0))
                 .stroke(rgba(0.2, 0.2, 0.2, 1.0));
             return;
@@ -234,6 +242,7 @@ fn event(app: &App, m: &mut Model, e: WindowEvent) {
                         heading = Direction::Right;
                     }
                 }
+
                 _ => (),
             },
             _ => (),
@@ -295,7 +304,7 @@ fn apply_tile_hints(board: &mut Vec<Vec<Tile>>) {
 
 fn model(app: &App) -> Model {
     app.new_window().event(event).view(view).build().unwrap();
-    Model::new(app, 10)
+    Model::new(app, 15)
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
@@ -311,8 +320,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
         for col in 0..board_dim {
             let y = map_range(row as f32, -1.0, board_dim as f32, -half_board, half_board);
             let x = map_range(col as f32, -1.0, board_dim as f32, -half_board, half_board);
-            let rect =
-                Rect::from_x_y_w_h(x, y, tile_size, tile_size).pad((tile_size / 10.0).min(10.0));
+            let rect = Rect::from_x_y_w_h(x, y, tile_size, tile_size);
             let tile = &model.board[row][col];
             tile.draw(&draw, &rect, &model.textures);
         }
